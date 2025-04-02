@@ -31,6 +31,11 @@ namespace HuntAndPeck.Views
             Top = vm.Bounds.Top / scaleY;
             Width = vm.Bounds.Width / scaleX;
             Height = vm.Bounds.Height / scaleY;
+
+            // Ensure window is activated and focused
+            this.Activate();
+            this.Focus();
+            MatchStringControl.Focus();
         }
 
         private void OverlayView_OnPreviewKeyDown(object sender, KeyEventArgs e)

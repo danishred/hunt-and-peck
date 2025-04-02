@@ -5,6 +5,7 @@ using HuntAndPeck.Services.Interfaces;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using UIAutomationClient;
@@ -14,26 +15,89 @@ namespace HuntAndPeck.Services
     internal class UiAutomationHintProviderService : IHintProviderService, IDebugHintProviderService
     {
         private readonly IUIAutomation _automation = new CUIAutomation();
+        //private readonly string _logFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "huntandpeck_debug.log");
+        private readonly HashSet<IntPtr> _processedWindows = new HashSet<IntPtr>();
+        private readonly Dictionary<IntPtr, int> _lastElementCounts = new Dictionary<IntPtr, int>();
+
+        private void Log(string message)
+        {
+            //try
+            //{
+            //    File.AppendAllText(_logFile, $"{DateTime.Now}: {message}{Environment.NewLine}");
+            //}
+            //catch (Exception ex)
+            //{
+            //    // If logging fails, try debug output as fallback
+            //    Debug.WriteLine($"Logging failed: {ex.Message}");
+            //    Debug.WriteLine(message);
+            //}
+            Debug.WriteLine(message);
+        }
+
+        private bool IsTreeReady(IntPtr hWnd)
+        {
+            var elements = EnumElements(hWnd);
+            int currentCount = elements.Count;
+            
+            // If we haven't seen this window before, store the count and wait
+            if (!_lastElementCounts.ContainsKey(hWnd))
+            {
+                _lastElementCounts[hWnd] = currentCount;
+                return false;
+            }
+
+            // If the count hasn't changed in the last check, the tree is likely ready
+            if (_lastElementCounts[hWnd] == currentCount)
+            {
+                return true;
+            }
+
+            // Update the count and wait
+            _lastElementCounts[hWnd] = currentCount;
+            return false;
+        }
 
         public HintSession EnumHints()
         {
             var foregroundWindow = User32.GetForegroundWindow();
             if (foregroundWindow == IntPtr.Zero)
             {
+                Log("No foreground window found");
                 return null;
             }
+            
+            Log($"Found foreground window: {foregroundWindow}");
+            
+            // Check if we've processed this window before
+            bool isFirstTime = !_processedWindows.Contains(foregroundWindow);
+            if (isFirstTime)
+            {
+                Log($"First time processing window {foregroundWindow}, waiting for tree to be ready");
+                _processedWindows.Add(foregroundWindow);
+                
+                // Wait for tree to be ready with a maximum timeout
+                int maxAttempts = 10; // 1 second total with 100ms intervals
+                for (int i = 0; i < maxAttempts; i++)
+                {
+                    if (IsTreeReady(foregroundWindow))
+                    {
+                        Log($"Tree ready after {i * 100}ms");
+                        break;
+                    }
+                    System.Threading.Thread.Sleep(100);
+                }
+            }
+            else
+            {
+                Log($"Window {foregroundWindow} already processed, skipping delay");
+            }
+            
             return EnumHints(foregroundWindow);
         }
 
         public HintSession EnumHints(IntPtr hWnd)
         {
-            Stopwatch sw = new Stopwatch();
-            sw.Start();
-            var session = EnumWindowHints(hWnd, CreateHint);
-            sw.Stop();
-
-            Debug.WriteLine("Enumeration of hints took {0} ms", sw.ElapsedMilliseconds);
-            return session;
+            return EnumWindowHints(hWnd, CreateHint);
         }
 
         public HintSession EnumDebugHints()
@@ -59,13 +123,16 @@ namespace HuntAndPeck.Services
         /// <returns>A hint session</returns>
         private HintSession EnumWindowHints(IntPtr hWnd, Func<IntPtr, Rect, IUIAutomationElement, Hint> hintFactory)
         {
+            Log($"Starting hint enumeration for window {hWnd}");
             var result = new List<Hint>();
             var elements = EnumElements(hWnd);
+            Log($"Found {elements.Count} automation elements");
 
             // Window bounds
             var rawWindowBounds = new RECT();
             User32.GetWindowRect(hWnd, ref rawWindowBounds);
             Rect windowBounds = rawWindowBounds;
+            Log($"Window bounds: {windowBounds}");
 
             foreach (var element in elements)
             {
@@ -82,11 +149,13 @@ namespace HuntAndPeck.Services
                         if (hint != null)
                         {
                             result.Add(hint);
+                            Log($"Created hint at {windowCoords}");
                         }
                     }
                 }
             }
 
+            Log($"Created {result.Count} hints total");
             return new HintSession
             {
                 Hints = result,
